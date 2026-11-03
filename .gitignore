@@ -1,0 +1,28 @@
+# Local Python and PlatformIO environments.
+/.venv/
+/.pio/
+/.platformio/
+/.cache/
+/dist/
+__pycache__/
+*.py[cod]
+
+# Device backups contain credentials and device identity.
+/backups/
+/config.json
+/config.*.json
+/.env
+/.env.*
+.elekstube-*
+*.bin
+*.elf
+*.map
+*.log
+
+# Workspace tooling and local settings.
+/.agents/
+/.codex/
+/.aws/
+/.idea/
+/.vscode/
+.DS_Store

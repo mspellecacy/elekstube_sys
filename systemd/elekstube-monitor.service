@@ -1,0 +1,15 @@
+[Unit]
+Description=ELEKSTUBE IPS PRO system monitor
+
+[Service]
+Type=simple
+# tools/install_service.py fills these paths for the current checkout.
+WorkingDirectory=@WORKING_DIRECTORY@
+ExecStart=@PYTHON@ @MONITOR@ run
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+TimeoutStopSec=8
+
+[Install]
+WantedBy=default.target

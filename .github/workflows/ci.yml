@@ -1,0 +1,58 @@
+name: Tests and firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Python and native C++ checks
+        run: python -m unittest discover -s tests -v
+      - name: Check service template
+        run: |
+          python -m venv .venv
+          .venv/bin/python tools/install_service.py --print > /tmp/elekstube-monitor.service
+          systemd-analyze verify /tmp/elekstube-monitor.service
+
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-build.txt
+      - name: Build application without flashing
+        run: pio run
+      - name: Package application-only firmware
+        run: |
+          mkdir -p dist
+          cp .pio/build/ipspro_monitor/firmware.bin dist/firmware.bin
+          cd dist
+          sha256sum firmware.bin > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ipspro-monitor-application-only
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

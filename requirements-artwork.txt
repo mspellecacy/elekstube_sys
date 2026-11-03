@@ -1,0 +1,2 @@
+# Procedural artwork, fonts and pixel captures; not needed by the running service.
+Pillow==11.3.0

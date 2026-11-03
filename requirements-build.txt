@@ -1,0 +1,5 @@
+-r requirements.txt
+platformio==6.1.19
+esptool==4.11.0
+# esptool 4.x imports BitStream, which bitstring 5.x removed.
+bitstring==4.3.1
