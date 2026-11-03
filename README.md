@@ -133,8 +133,24 @@ Only one process should send stats at a time. The clock accepts one TCP client.
 | Button | Action |
 | --- | --- |
 | A | Monitor → Nixie → flip → Orbit → monitor |
+| B | Normal time → stopwatch → 5 / 10 / 25 / 45 / 60-minute timers → normal time |
+| C | Start → stop → reset the selected stopwatch or timer |
 | D | Blank/unblank the displays |
-| B / C | Unassigned |
+
+Stopwatch and countdown displays use **H H M M S S** in your chosen clock face.
+Pressing B from the monitor opens the last clock face; A still cycles faces and
+the monitor. Small labels show the selected tool, its state, and C's next action.
+C does nothing in normal clock mode. After stopping a tool, the next press
+**resets** it; there is no pause/resume toggle.
+
+![Stopped stopwatch using the flip face, captured from the device](docs/stopwatch-preview.png)
+
+The stopwatch and each timer keep their own state and continue running when you
+switch tools, view stats, blank the screens, or disconnect the PC. At zero, a
+timer holds `00 00 00` with a red `TIME UP` label until C resets it; it does not
+interrupt another view. There is no audible alarm. Timers work without host time
+synchronization, and the stopwatch supports up to `99 59 59`. Timing state resets
+when the device loses power or restarts.
 
 The device starts in monitor mode. Host updates set the local time and continue
 collecting graph history in every clock view. After six seconds without data,
@@ -152,7 +168,7 @@ are off.
 ```
 
 The checks cover telemetry accounting, transport framing and authentication,
-private config handling, clock/button state, and all three C++ renderers under
+private config handling, clock/button and timing-tool state, and all three C++ renderers under
 AddressSanitizer and UndefinedBehaviorSanitizer. CI runs the checks and builds
 the application. It never flashes a device.
 

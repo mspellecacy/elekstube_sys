@@ -7,6 +7,7 @@
 | `monitor.py` | Linux metrics, USB/TCP transport and pairing CLI |
 | `src/main.cpp` | Display composition, protocol, buttons and animation scheduling |
 | `src/clock_state.h` | Local clock, mode cycle and debouncing |
+| `src/timing_tools.h` | Monotonic stopwatch, independent countdown presets and tool cycle |
 | `src/network_link.h` | Wi-Fi, mDNS, pairing and authenticated TCP client |
 | `src/*_renderer.h` | Shared native/embedded rendering code |
 | `src/*_assets.h`, `src/monitor_fonts.h` | Generated artwork and font data |
@@ -23,6 +24,18 @@ Clock time is host-local milliseconds since midnight, refreshed with telemetry.
 The device's millisecond timer keeps it ticking between updates and while the
 host is offline. Clock faces render locally; no animation frames travel over
 USB or Wi-Fi.
+
+Stopwatch and countdown sessions accumulate unsigned `millis()` deltas separately
+from wall-clock time, handling its rollover and ignoring host time corrections.
+Each session survives tool/view switches and display blanking in RAM. C cycles
+ready → running → stopped → ready; completion holds zero until reset. Durations
+never wrap at midnight: the stopwatch saturates at 99:59:59.999, and countdowns
+round upward to whole seconds for display. The native timing tests cover these
+transitions, concurrent background sessions, late ticks, and counter rollover.
+
+Timing labels occupy static strips above and below every face's animated region.
+They redraw on selection, state changes, and countdown completion; per-frame
+rendering and the existing animation schedules are unchanged.
 
 ## Run checks and build
 

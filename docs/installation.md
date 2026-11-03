@@ -119,7 +119,9 @@ This restores the original application, settings and image filesystem together.
 | Display DC / reset / backlight | 25 / 26 / 27 |
 | 74HC595 data / clock / latch | 14 / 9 / 10 |
 | RGB LEDs | 12 |
-| Button A / D | 33 / 34 |
+| Button A / B / C / D | 33 / 32 / 35 / 34 |
 
 The six display-select bits run in reverse physical order. Display chip selects
 are controlled through the shift register, including during DMA transfers.
+Buttons are active-low. A/B use input pull-ups; C/D use the board's external
+pull-ups because GPIO 35/34 do not have internal pull-ups.

@@ -67,6 +67,28 @@ update stats, but do not initially synchronize the clock.
 Modes are `monitor`, `clock` (Nixie), `flip` and `orbit`. The reply echoes `type`,
 `mode` and `seq`. Sending telemetry preserves the selected view.
 
+## Button controls and timing tools
+
+USB and authenticated TCP clients can invoke the same actions as physical buttons:
+
+```json
+{"type":"control","button":"B","seq":2}
+```
+
+The reply echoes `type: "control"`, `button` and `seq`. Only single uppercase
+`A`, `B`, `C` or `D` values are accepted; invalid values return `invalid-control`.
+Remote controls do not increment physical button press counters.
+
+B cycles selections 0–6: normal clock, stopwatch, then 5/10/25/45/60-minute
+countdowns. From the monitor it opens the last selected clock face. C performs
+start → stop → reset on the selected timing tool and has no effect on normal time.
+A cycles display faces/monitor; D blanks/unblanks. Changing the view with `mode`
+preserves the selected tool and all running sessions.
+
+Each stopwatch/timer runs independently of host time, connection status, display
+blanking and the other sessions. Completion holds zero until reset; timing state
+is transient and resets on device restart.
+
 ## Status and performance
 
 `hello` also reports:
@@ -83,8 +105,23 @@ Modes are `monitor`, `clock` (Nixie), `flip` and `orbit`. The reply echoes `type
 | `orbit_dma`, `orbit_bands` | Overlapping Orbit transfer state and bands per tube |
 | `animation_us` | Active work and waits across a six-tube frame, or one flip-card update |
 | `render_us`, `spi_us` | Last render/transfer timings; DMA reports individual bands |
-| `button_a_presses` | Debounced A-button presses |
+| `button_a_presses`, `button_b_presses`, `button_c_presses` | Debounced physical button presses |
+| `screen_enabled` | Whether the displays are unblanked |
+| `timing` | Selected tool and its state, described below |
 | `wifi` | Connection state, IP, hostname, port and signal strength |
+
+Example timing status:
+
+```json
+{"tool":"timer","selection":2,"state":"running","value_ms":298500,"duration_seconds":300,"digits":"000459"}
+```
+
+`tool` is `clock`, `stopwatch` or `timer`. `state` is `ready`, `running`, `stopped`
+or `finished`; normal clock mode reports `clock`. `value_ms` means elapsed time
+for the stopwatch and remaining time for a timer; normal clock mode reports zero.
+`duration_seconds` is the timer's preset and otherwise zero. `digits` is the
+selected tool's six-digit display, or `------` for an unsynchronized normal clock.
+The existing top-level `clock` field always reports wall-clock time.
 
 DMA `spi_us` is a transfer's elapsed lifetime and can include polling delays.
 Measure completed `orbit_frames` over wall-clock time for actual six-tube FPS;

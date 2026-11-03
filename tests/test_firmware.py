@@ -7,6 +7,16 @@ import unittest
 
 
 class FirmwareStateTests(unittest.TestCase):
+    def test_timing_tools_start_stop_reset_background_and_rollover(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "timing-tools-test"
+            subprocess.run(["g++", "-std=c++11", "-Wall", "-Wextra", "-Werror",
+                            "-fsanitize=address,undefined", "-I", str(root / "src"),
+                            str(root / "tests/timing_tools_test.cpp"), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True,
+                           env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
+
     def test_independent_usb_tcp_framing_and_overflow_recovery(self):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temp:

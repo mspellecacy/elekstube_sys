@@ -7,6 +7,7 @@
 #include <cmath>
 #include "monitor_fonts.h"
 #include "clock_state.h"
+#include "timing_tools.h"
 #include "nixie_renderer.h"
 #include "flip_renderer.h"
 #include "orbit_renderer.h"
@@ -15,7 +16,7 @@
 namespace {
 constexpr uint8_t kData = 14, kClock = 9, kLatch = 10, kBacklight = 27;
 constexpr uint8_t kScreens = 6;
-constexpr uint8_t kButtonA = 33, kButtonD = 34;
+constexpr uint8_t kButtonA = 33, kButtonB = 32, kButtonC = 35, kButtonD = 34;
 constexpr uint32_t kOfflineMs = 6000;
 constexpr size_t kMaxLine = 1536;
 constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
@@ -34,7 +35,10 @@ NetworkLink network;
 bool online = false, screenEnabled = true;
 uint32_t usbFrames = 0, tcpFrames = 0;
 DisplayMode displayMode = DisplayMode::Monitor;
+DisplayMode lastClockMode = DisplayMode::Nixie;
 LocalClock localClock;
+TimingTools timingTools;
+bool timingLabelsDirty = false;
 NixieRenderer nixie;
 FlipRenderer flip;
 OrbitRenderer orbit;
@@ -45,12 +49,13 @@ static_assert(FlipRenderer::kW*FlipRenderer::kH <= 135*240,
               "Clock faces share one transfer buffer");
 static_assert(OrbitRenderer::kW*OrbitRenderer::kH <= 135*240,
               "Orbit shares the existing transfer buffer");
-DebouncedButton buttonA, buttonD;
+DebouncedButton buttonA, buttonB, buttonC, buttonD;
 uint32_t lastUpdate = 0, frames = 0;
 uint32_t animationFrames = 0, animationWorkUs = 0, animationFrameUs = 0;
 uint32_t animationStepMs = 0, animationTimeMs = 0;
 uint32_t animationRenderUs = 0, animationSpiUs = 0;
 uint32_t buttonAPresses = 0;
+uint32_t buttonBPresses = 0, buttonCPresses = 0;
 uint32_t flipUpdates = 0;
 uint32_t orbitFrames = 0;
 uint8_t animationScreen = 0;
@@ -62,6 +67,18 @@ bool orbitDmaLastBand = false;
 uint32_t orbitDmaStarted = 0, orbitDmaFrameWorkUs = 0;
 
 void finishOrbitTransfer(bool wait = true);
+
+void updateTime(uint32_t now) {
+  localClock.tick(now);
+  if (timingTools.tick(now)) timingLabelsDirty = true;
+}
+
+bool displayedTimeReady() { return !timingTools.isClock() || localClock.synced(); }
+
+void displayedDigits(char (&out)[7]) {
+  if (timingTools.isClock()) localClock.digits(out);
+  else timingTools.session().digits(out);
+}
 
 struct Panel {
   char label[14], value[10], unit[10], detail[20];
@@ -96,15 +113,19 @@ void finishOrbitTransfer(bool wait) {
 }
 
 void hello(Stream &reply, uint32_t seq = 0) {
-  localClock.tick(millis());
-  char digits[7];
+  updateTime(millis());
+  char digits[7], toolDigits[7];
   localClock.digits(digits);
+  displayedDigits(toolDigits);
   reply.printf("{\"type\":\"hello\",\"protocol\":1,\"firmware\":\"ipspro-monitor-1\","
                 "\"screens\":6,\"theme\":\"rings\",\"seq\":%lu,\"frames\":%lu,\"online\":%s,\"free_heap\":%u,"
                 "\"mode\":\"%s\",\"clock_synced\":%s,\"clock\":\"%s\",\"clock_style\":\"%s\","
                 "\"clock_styles\":[\"nixie\",\"flip\",\"orbit\"],\"flip_updates\":%lu,"
                 "\"orbit_frames\":%lu,\"orbit_cached\":%s,\"orbit_dma\":%s,\"orbit_bands\":%u,"
-                "\"animation_frames\":%lu,\"animation_us\":%lu,\"render_us\":%lu,\"spi_us\":%lu,\"button_a_presses\":%lu,\"animation_cached\":%s,\"usb_frames\":%lu,\"tcp_frames\":%lu,\"wifi\":{\"connected\":%s,\"ip\":\"%s\",\"hostname\":\"elekstube-monitor.local\",\"port\":32100,\"rssi\":%d}}\n",
+                "\"animation_frames\":%lu,\"animation_us\":%lu,\"render_us\":%lu,\"spi_us\":%lu,\"button_a_presses\":%lu,\"animation_cached\":%s,\"usb_frames\":%lu,\"tcp_frames\":%lu,"
+                "\"button_b_presses\":%lu,\"button_c_presses\":%lu,\"screen_enabled\":%s,"
+                "\"timing\":{\"tool\":\"%s\",\"selection\":%u,\"state\":\"%s\",\"value_ms\":%lu,\"duration_seconds\":%lu,\"digits\":\"%s\"},"
+                "\"wifi\":{\"connected\":%s,\"ip\":\"%s\",\"hostname\":\"elekstube-monitor.local\",\"port\":32100,\"rssi\":%d}}\n",
                 static_cast<unsigned long>(seq), static_cast<unsigned long>(frames),
                 online ? "true" : "false", ESP.getFreeHeap(), displayModeName(displayMode),
                 localClock.synced() ? "true" : "false", localClock.synced() ? digits : "------",
@@ -117,6 +138,12 @@ void hello(Stream &reply, uint32_t seq = 0) {
                 static_cast<unsigned long>(animationRenderUs), static_cast<unsigned long>(animationSpiUs),
                 static_cast<unsigned long>(buttonAPresses), nixie.cached() ? "true" : "false",
                 static_cast<unsigned long>(usbFrames), static_cast<unsigned long>(tcpFrames),
+                static_cast<unsigned long>(buttonBPresses), static_cast<unsigned long>(buttonCPresses),
+                screenEnabled ? "true" : "false", timingTools.name(), timingTools.selected(),
+                timingTools.isClock() ? "clock" : timingStateName(timingTools.session().state()),
+                static_cast<unsigned long>(timingTools.isClock() ? 0 : timingTools.session().milliseconds()),
+                static_cast<unsigned long>(timingTools.isClock() ? 0 : timingTools.session().duration()/1000),
+                displayedTimeReady() ? toolDigits : "------",
                 WiFi.status() == WL_CONNECTED ? "true" : "false",
                 WiFi.localIP().toString().c_str(), WiFi.RSSI());
 }
@@ -224,19 +251,46 @@ void traffic(uint8_t i) {
 }
 
 void prepareClock(uint32_t now) {
-  localClock.tick(now);
+  updateTime(now);
   char digits[7];
-  localClock.digits(digits);
-  if (displayMode == DisplayMode::Orbit) orbit.setDigits(digits,localClock.synced(),now);
-  else if (displayMode == DisplayMode::Flip) flip.setDigits(digits,localClock.synced(),now);
-  else nixie.setDigits(digits, localClock.synced(), now);
+  displayedDigits(digits);
+  if (displayMode == DisplayMode::Orbit) orbit.setDigits(digits,displayedTimeReady(),now);
+  else if (displayMode == DisplayMode::Flip) flip.setDigits(digits,displayedTimeReady(),now);
+  else nixie.setDigits(digits, displayedTimeReady(), now);
+}
+
+void timingLabels(uint8_t screen) {
+  if (timingTools.isClock()) return;
+  const auto state = timingTools.session().state();
+  uint16_t accent = timingTools.isStopwatch() ? rgb(107,218,163) : rgb(255,174,83);
+  if (state == TimingState::Finished) accent = rgb(255,91,85);
+  else if (state == TimingState::Stopped) accent = kMuted;
+  char title[16];
+  if (screen < 2) {
+    if (timingTools.isStopwatch()) strlcpy(title,"STOPWATCH",sizeof(title));
+    else snprintf(title,sizeof(title),"%02u MIN TIMER",static_cast<unsigned>(timingTools.session().duration()/60000));
+  } else if (screen < 4) {
+    strlcpy(title,state == TimingState::Running ? "RUNNING" :
+                  state == TimingState::Stopped ? "STOPPED" :
+                  state == TimingState::Finished ? "TIME UP" : "READY",sizeof(title));
+  } else {
+    strlcpy(title,state == TimingState::Ready ? "C: START" :
+                  state == TimingState::Running ? "C: STOP" : "C: RESET",sizeof(title));
+  }
+  // Both strips are outside every face's animated transfer region.
+  canvas.fillRect(0,0,135,21,kBg);
+  text(title,67,11,accent);
+  canvas.fillRect(0,225,135,15,kBg);
+  const char *units[] = {"HOURS","MINUTES","SECONDS"};
+  text(units[screen/2],67,232,kMuted);
 }
 
 void drawClock(uint8_t i) {
   if (displayMode == DisplayMode::Orbit) orbit.render(i,millis(),static_cast<uint16_t *>(canvas.getPointer()),true,true);
   else if (displayMode == DisplayMode::Flip) flip.render(i,millis(),static_cast<uint16_t *>(canvas.getPointer()),true,true);
   else nixie.render(i, millis(), static_cast<uint16_t *>(canvas.getPointer()), true, true);
-  if (!localClock.synced()) text("WAITING FOR HOST", 67, 220);
+  if (timingTools.isClock() && !localClock.synced()) text("WAITING FOR HOST", 67, 220);
+  timingLabels(i);
 }
 
 void drawPanel(uint8_t i) {
@@ -257,6 +311,7 @@ void drawAll() {
   if (isClockMode(displayMode)) prepareClock(millis());
   for (uint8_t i = 0; i < kScreens; ++i) drawPanel(i);
   selectScreens(0);
+  timingLabelsDirty = false;
 }
 
 void pushClockRegion(uint8_t screen, int x, int y, int width, int height, uint32_t started) {
@@ -374,11 +429,38 @@ void setDisplayMode(DisplayMode mode) {
     }
   }
   displayMode = mode;
+  if (isClockMode(mode)) lastClockMode = mode;
   animationScreen = 0;
   orbitBand = 0;
   animationStepMs = millis();
-  localClock.tick(millis());
+  updateTime(millis());
   drawAll();
+}
+
+void pressControl(char button) {
+  switch (button) {
+    case 'A':
+      setDisplayMode(nextDisplayMode(displayMode));
+      break;
+    case 'B':
+      timingTools.next();
+      setDisplayMode(isClockMode(displayMode) ? displayMode : lastClockMode);
+      break;
+    case 'C':
+      if (!timingTools.isClock()) {
+        timingTools.press(millis());
+        setDisplayMode(isClockMode(displayMode) ? displayMode : lastClockMode);
+      }
+      break;
+    case 'D':
+      screenEnabled = !screenEnabled;
+      if (screenEnabled) drawAll();
+      selectScreens(0x3F);
+      tft.writecommand(screenEnabled ? 0x29 : 0x28);
+      selectScreens(0);
+      digitalWrite(kBacklight, screenEnabled ? HIGH : LOW);
+      break;
+  }
 }
 
 void processLine(const char *line, size_t lineLength, Stream &reply, bool tcp) {
@@ -398,6 +480,15 @@ void processLine(const char *line, size_t lineLength, Stream &reply, bool tcp) {
     }
   }
   if (strcmp(type, "hello") == 0) { hello(reply, doc["seq"] | 0UL); return; }
+  if (strcmp(type, "control") == 0) {
+    const char *button = doc["button"] | "";
+    if (strlen(button) != 1 || button[0] < 'A' || button[0] > 'D') {
+      reply.println("{\"type\":\"error\",\"error\":\"invalid-control\"}"); return;
+    }
+    pressControl(button[0]);
+    reply.printf("{\"type\":\"control\",\"seq\":%lu,\"button\":\"%c\"}\n",doc["seq"] | 0UL,button[0]);
+    return;
+  }
   if (strcmp(type, "wifi") == 0) {
     if (tcp) { reply.println("{\"type\":\"error\",\"error\":\"usb-only\"}"); return; }
     if (!doc["token"].is<const char *>() ||
@@ -516,6 +607,8 @@ void setup() {
   digitalWrite(kBacklight, LOW);
   // Active-low switches with external pull-up resistors on the V2/Pro board.
   pinMode(kButtonA, INPUT_PULLUP);  // A: monitor -> Nixie -> flip -> Orbit -> monitor.
+  pinMode(kButtonB, INPUT_PULLUP);  // B: time -> stopwatch -> countdown presets.
+  pinMode(kButtonC, INPUT);         // C: start -> stop -> reset; external pull-up.
   pinMode(kButtonD, INPUT);  // D: blank/unblank all screens.
   selectScreens(0x3F);
   tft.init();
@@ -555,19 +648,23 @@ void loop() {
     if (!isClockMode(displayMode)) drawAll();
   }
   const uint32_t now = millis();
-  localClock.tick(now);
+  updateTime(now);
   if (buttonA.pressed(digitalRead(kButtonA) == LOW, now)) {
     ++buttonAPresses;
-    setDisplayMode(nextDisplayMode(displayMode));
+    pressControl('A');
+  }
+  if (buttonB.pressed(digitalRead(kButtonB) == LOW, now)) {
+    ++buttonBPresses;
+    pressControl('B');
+  }
+  if (buttonC.pressed(digitalRead(kButtonC) == LOW, now)) {
+    ++buttonCPresses;
+    pressControl('C');
   }
   if (buttonD.pressed(digitalRead(kButtonD) == LOW, now)) {
-    screenEnabled = !screenEnabled;
-    if (screenEnabled) drawAll();
-    selectScreens(0x3F);
-    tft.writecommand(screenEnabled ? 0x29 : 0x28);
-    selectScreens(0);
-    digitalWrite(kBacklight, screenEnabled ? HIGH : LOW);
+    pressControl('D');
   }
+  if (timingLabelsDirty && isClockMode(displayMode)) drawAll();
   if (isClockMode(displayMode) && screenEnabled) animateClock();
   // DMA waits yield while pixels travel. Give the idle task one explicit tick
   // per complete Orbit frame rather than adding a tick to all twelve bands.
