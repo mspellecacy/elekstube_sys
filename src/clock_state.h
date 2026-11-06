@@ -20,7 +20,7 @@ inline const char *displayModeName(DisplayMode mode) {
   }
 }
 
-// Host-local milliseconds since midnight; no timezone database needed on ESP32.
+// Local milliseconds since midnight, supplied by the host or NTP adapter.
 class LocalClock {
  public:
   static constexpr uint32_t kDayMs = 86400000;

@@ -155,7 +155,23 @@ when the device loses power or restarts.
 The device starts in monitor mode. Host updates set the local time and continue
 collecting graph history in every clock view. After six seconds without data,
 the monitor shows `HOST OFFLINE`; a synchronized clock keeps ticking and animating
-while powered. After a device restart it needs a new host update to set the time.
+while powered. After a restart, Wi-Fi NTP synchronization restores the time without a host update.
+NTP runs automatically over saved Wi-Fi, defaults to UTC and `pool.ntp.org`,
+and periodically corrects the clock. Set your local timezone once (stop the
+monitor service first):
+
+```sh
+.venv/bin/python monitor.py configure-clock --timezone 'EST5EDT,M3.2.0,M11.1.0'
+# Optional: --ntp-server 192.168.1.1
+```
+
+Timezone values are POSIX TZ rules, not IANA names; this example follows
+Toronto/New York daylight saving changes. Settings survive restarts.
+Until NTP succeeds, host time remains the fallback. Once synchronized, NTP
+takes precedence over host clock updates and keeps ticking if Wi-Fi drops.
+Stopwatch and countdown timing remain independent.
+Use `monitor.py probe` to check `ntp_synced`.
+
 The PC must remain awake with the sender running for live stats. Base RGB LEDs
 are off.
 

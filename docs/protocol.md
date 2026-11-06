@@ -138,3 +138,32 @@ bytes** of raw 135 × 240 RGB565 pixels in **big-endian** order. Capture is USB-
 and occupies the connection for several seconds. The firmware pauses its offline
 timer during capture to retain graph history. Stop the monitor service first;
 the supplied capture tool assembles the six panels.
+
+
+## NTP configuration
+
+USB or an authenticated TCP connection accepts:
+
+```json
+{"type":"ntp","seq":1,"timezone":"EST5EDT,M3.2.0,M11.1.0","server":"pool.ntp.org"}
+```
+
+Both fields are required. The timezone is a printable POSIX TZ rule (1–95
+characters, no spaces); the server is a hostname or IPv4 address (1–127
+letters, digits, dots or hyphens). Use valid POSIX rules; the device does not
+validate their grammar. Settings are saved together in NVS and applied without
+rebooting. Success replies with `{"type":"ntp","seq":1,"saved":true}`;
+invalid settings or failed storage return `invalid-or-unsaved-ntp-settings`.
+
+NTP starts automatically on Wi-Fi with defaults `UTC0` and `pool.ntp.org`.
+The hello response adds `ntp_synced`: true after the first successful NTP
+synchronization during this boot (it does not indicate current connectivity).
+NTP takes precedence over `clock_ms` after synchronization. The UTC system
+clock keeps running offline and local time conversion applies DST rules.
+Before synchronization, telemetry still supplies local time as before.
+
+For diagnostics, send `{"type":"ntp-status","seq":1}`. The response reports
+`enabled`, `synced`, UTC `epoch`, configured `server`, resolved `server_ip`,
+`gateway`, `dns`, and `uptime_ms`. TCP requires the usual authentication.
+USB adapters may reset the device when opening the port; allow several seconds
+for Wi-Fi and NTP before interpreting an unsynchronized boot response.

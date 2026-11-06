@@ -5,6 +5,7 @@
 #include <TFT_eSPI.h>
 #include <Adafruit_NeoPixel.h>
 #include <cmath>
+#include <lwip/apps/sntp.h>
 #include "monitor_fonts.h"
 #include "clock_state.h"
 #include "timing_tools.h"
@@ -12,6 +13,7 @@
 #include "flip_renderer.h"
 #include "orbit_renderer.h"
 #include "network_link.h"
+#include "ntp_clock.h"
 
 namespace {
 constexpr uint8_t kData = 14, kClock = 9, kLatch = 10, kBacklight = 27;
@@ -37,6 +39,7 @@ uint32_t usbFrames = 0, tcpFrames = 0;
 DisplayMode displayMode = DisplayMode::Monitor;
 DisplayMode lastClockMode = DisplayMode::Nixie;
 LocalClock localClock;
+NtpClock ntpClock;
 TimingTools timingTools;
 bool timingLabelsDirty = false;
 NixieRenderer nixie;
@@ -70,6 +73,7 @@ void finishOrbitTransfer(bool wait = true);
 
 void updateTime(uint32_t now) {
   localClock.tick(now);
+  ntpClock.poll(localClock, now);
   if (timingTools.tick(now)) timingLabelsDirty = true;
 }
 
@@ -118,7 +122,7 @@ void hello(Stream &reply, uint32_t seq = 0) {
   localClock.digits(digits);
   displayedDigits(toolDigits);
   reply.printf("{\"type\":\"hello\",\"protocol\":1,\"firmware\":\"ipspro-monitor-1\","
-                "\"screens\":6,\"theme\":\"rings\",\"seq\":%lu,\"frames\":%lu,\"online\":%s,\"free_heap\":%u,"
+                "\"ntp_synced\":%s,\"screens\":6,\"theme\":\"rings\",\"seq\":%lu,\"frames\":%lu,\"online\":%s,\"free_heap\":%u,"
                 "\"mode\":\"%s\",\"clock_synced\":%s,\"clock\":\"%s\",\"clock_style\":\"%s\","
                 "\"clock_styles\":[\"nixie\",\"flip\",\"orbit\"],\"flip_updates\":%lu,"
                 "\"orbit_frames\":%lu,\"orbit_cached\":%s,\"orbit_dma\":%s,\"orbit_bands\":%u,"
@@ -126,6 +130,7 @@ void hello(Stream &reply, uint32_t seq = 0) {
                 "\"button_b_presses\":%lu,\"button_c_presses\":%lu,\"screen_enabled\":%s,"
                 "\"timing\":{\"tool\":\"%s\",\"selection\":%u,\"state\":\"%s\",\"value_ms\":%lu,\"duration_seconds\":%lu,\"digits\":\"%s\"},"
                 "\"wifi\":{\"connected\":%s,\"ip\":\"%s\",\"hostname\":\"elekstube-monitor.local\",\"port\":32100,\"rssi\":%d}}\n",
+                ntpClock.synced() ? "true" : "false",
                 static_cast<unsigned long>(seq), static_cast<unsigned long>(frames),
                 online ? "true" : "false", ESP.getFreeHeap(), displayModeName(displayMode),
                 localClock.synced() ? "true" : "false", localClock.synced() ? digits : "------",
@@ -489,6 +494,31 @@ void processLine(const char *line, size_t lineLength, Stream &reply, bool tcp) {
     reply.printf("{\"type\":\"control\",\"seq\":%lu,\"button\":\"%c\"}\n",doc["seq"] | 0UL,button[0]);
     return;
   }
+  if (strcmp(type, "ntp-status") == 0) {
+    JsonDocument status;
+    status["type"] = "ntp-status";
+    status["seq"] = doc["seq"] | 0UL;
+    status["enabled"] = bool(sntp_enabled());
+    status["synced"] = ntpClock.synced();
+    status["epoch"] = static_cast<long>(time(nullptr));
+    status["server"] = sntp_getservername(0);
+    status["server_ip"] = IPAddress(ip_2_ip4(sntp_getserver(0))->addr).toString();
+    status["gateway"] = WiFi.gatewayIP().toString();
+    status["dns"] = WiFi.dnsIP().toString();
+    status["uptime_ms"] = millis();
+    serializeJson(status, reply);
+    reply.println();
+    return;
+  }
+  if (strcmp(type, "ntp") == 0) {
+    if (!doc["timezone"].is<const char *>() || !doc["server"].is<const char *>() ||
+        !ntpClock.configure(doc["timezone"].as<const char *>(), doc["server"].as<const char *>())) {
+      reply.println("{\"type\":\"error\",\"error\":\"invalid-or-unsaved-ntp-settings\"}");
+      return;
+    }
+    reply.printf("{\"type\":\"ntp\",\"seq\":%lu,\"saved\":true}\n", doc["seq"] | 0UL);
+    return;
+  }
   if (strcmp(type, "wifi") == 0) {
     if (tcp) { reply.println("{\"type\":\"error\",\"error\":\"usb-only\"}"); return; }
     if (!doc["token"].is<const char *>() ||
@@ -584,7 +614,7 @@ void processLine(const char *line, size_t lineLength, Stream &reply, bool tcp) {
   online = true;
   lastUpdate = millis();
   const bool wasSynced = localClock.synced();
-  if (!doc["clock_ms"].isNull()) localClock.sync(doc["clock_ms"].as<uint32_t>(), lastUpdate);
+  if (!ntpClock.synced() && !doc["clock_ms"].isNull()) localClock.sync(doc["clock_ms"].as<uint32_t>(), lastUpdate);
   if (!isClockMode(displayMode) || (!wasSynced && localClock.synced())) drawAll();
   ++frames;
   if (tcp) ++tcpFrames; else ++usbFrames;
@@ -622,6 +652,7 @@ void setup() {
   glowTransfer = static_cast<uint16_t *>(canvas.getPointer());
   orbitDmaReady = tft.initDMA(false);
   network.begin();
+  ntpClock.begin();
   const char *labels[] = {"CPU USAGE", "CPU TEMP", "MEMORY", "NETWORK", "DISK I/O", "GPU"};
   for (uint8_t i = 0; i < kScreens; ++i) strlcpy(panels[i].label, labels[i], sizeof(panels[i].label));
   drawAll();

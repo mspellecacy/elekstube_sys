@@ -49,6 +49,15 @@ class FirmwareStateTests(unittest.TestCase):
             subprocess.run([str(binary)], check=True,
                            env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
 
+    def test_ntp_startup_persistence_dst_and_offline_time(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "ntp-clock-test"
+            subprocess.run(["g++", "-std=c++11", "-Wall", "-Wextra", "-Werror",
+                            "-I", str(root / "tests/ntp_stubs"), "-I", str(root / "src"),
+                            str(root / "tests/ntp_clock_test.cpp"), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_time_rollovers_and_button_bounce(self):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temp:

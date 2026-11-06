@@ -442,10 +442,12 @@ def acquire_lock(port: str):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("sample", "probe", "run", "configure-wifi"))
+    parser.add_argument("command", choices=("sample", "probe", "run", "configure-wifi", "configure-clock"))
     parser.add_argument("--port", help="USB device or tcp://hostname:32100; defaults to saved config, then USB")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Private local connection config")
     parser.add_argument("--ssid", help="configure-wifi only: change network (otherwise reuse the clock's saved Wi-Fi)")
+    parser.add_argument("--timezone", default="UTC0", help="configure-clock: POSIX TZ rule (default UTC0)")
+    parser.add_argument("--ntp-server", default="pool.ntp.org", help="configure-clock: NTP hostname or IPv4 address")
     parser.add_argument("--interval", type=float, default=1)
     parser.add_argument("--samples", type=int, default=0, help="Stop after N acknowledged updates (0 = forever)")
     args = parser.parse_args()
@@ -487,6 +489,11 @@ def main() -> int:
                     LOG.info("Connected via %s: %s", endpoint, info)
                     if args.command == "configure-wifi":
                         configure_wifi(device, args.config, config, args.ssid)
+                        return 0
+                    if args.command == "configure-clock":
+                        device.send({"type": "ntp", "seq": 1, "timezone": args.timezone,
+                                     "server": args.ntp_server})
+                        print(json.dumps(device.receive("ntp", seq=1), indent=2))
                         return 0
                     if args.command == "probe":
                         print(json.dumps(info, indent=2))
