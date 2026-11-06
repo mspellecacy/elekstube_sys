@@ -69,13 +69,6 @@ uint8_t orbitBand = 0;
 bool orbitDmaLastBand = false;
 uint32_t orbitDmaStarted = 0, orbitDmaFrameWorkUs = 0;
 
-// RGB status lighting on the 12 NeoPixels (GPIO 12). Only show() when the color
-// changes so idle loops do not churn the bus.
-constexpr uint32_t kHoldMs = 1000;      // Long-press threshold shared by all buttons.
-constexpr uint8_t kLedCount = 12;
-uint32_t lastLedColor = 0;              // Packed 0x00RRGGBB; 0 means off.
-uint8_t backlightLevel = 255;           // 100 % → 60 % → 30 % → off → 100 %.
-
 // Read the ESP32's internal die temperature as a standalone fallback when the
 // host is offline. Only compiled on the ESP32 target.
 float internalCelsius() {
@@ -466,37 +459,6 @@ void setDisplayMode(DisplayMode mode) {
   drawAll();
 }
 
-// RGB status lighting: one color for the whole strip, refreshed only when it
-// changes so the NeoPixel bus stays idle otherwise.
-void updateLeds(uint32_t now) {
-  uint32_t color = 0;
-  if (screenEnabled) {
-    if (!timingTools.isClock()) {
-      const auto state = timingTools.session().state();
-      if (state == TimingState::Running) {
-        // Gentle breathing yellow-green while a stopwatch or timer runs.
-        const float breathe = 0.5f + 0.5f * sinf(static_cast<float>(now) / 900.0f);
-        color = rgb(static_cast<uint8_t>(255 * breathe),
-                    static_cast<uint8_t>(180 * breathe), 0);
-      } else if (state == TimingState::Finished) {
-        color = rgb(255, 0, 0);  // Timer finished: solid red.
-      } else {
-        color = rgb(64, 64, 0);  // Stopped or ready: dim yellow.
-      }
-    } else if (online && ntpClock.synced()) {
-      color = rgb(0, 255, 0);    // Synced + online: green.
-    } else if (WiFi.status() == WL_CONNECTED) {
-      color = rgb(0, 0, 255);    // Wi-Fi up, not yet synced: blue.
-    } else {
-      color = rgb(255, 0, 0);    // Offline: red.
-    }
-  }
-  if (color == lastLedColor) return;
-  for (uint8_t n = 0; n < kLedCount; ++n) leds.setPixelColor(n, color);
-  leds.show();
-  lastLedColor = color;
-}
-
 void pressControl(char button) {
   switch (button) {
     case 'A':
@@ -755,13 +717,9 @@ void loop() {
   }
   const uint32_t now = millis();
   updateTime(now);
-  updateLeds(now);
   if (buttonA.pressed(digitalRead(kButtonA) == LOW, now)) {
     ++buttonAPresses;
     pressControl('A');
-  }
-  if (buttonA.held(digitalRead(kButtonA) == LOW, now, kHoldMs)) {
-    setDisplayMode(DisplayMode::Monitor);
   }
   if (buttonB.pressed(digitalRead(kButtonB) == LOW, now)) {
     ++buttonBPresses;
@@ -773,16 +731,6 @@ void loop() {
   }
   if (buttonD.pressed(digitalRead(kButtonD) == LOW, now)) {
     pressControl('D');
-  }
-  if (buttonD.held(digitalRead(kButtonD) == LOW, now, kHoldMs)) {
-    // Cycle backlight brightness: 100 → 60 → 30 → off → 100.
-    static constexpr uint8_t kLevels[] = {255, 153, 76, 0};
-    uint8_t next = kLevels[0];
-    for (unsigned n = 0; n < sizeof(kLevels); ++n) {
-      if (kLevels[n] == backlightLevel) { next = kLevels[(n + 1) % sizeof(kLevels)]; break; }
-    }
-    backlightLevel = next;
-    analogWrite(kBacklight, backlightLevel);
   }
   if (timingLabelsDirty && isClockMode(displayMode)) drawAll();
   if (isClockMode(displayMode) && screenEnabled) animateClock();
