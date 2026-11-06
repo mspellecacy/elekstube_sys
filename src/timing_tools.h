@@ -56,6 +56,17 @@ class TimingSession {
   uint32_t milliseconds() const { return value_; }
   uint32_t duration() const { return duration_; }
   TimingState state() const { return state_; }
+
+  // Set a countdown's duration and arm it in the Ready state. Stopwatches
+  // (zero duration) are unchanged. Durations above the maximum saturate.
+  void setDuration(uint32_t durationMs) {
+    if (!duration_) return;  // Stopwatch: duration is fixed at zero.
+    duration_ = durationMs < kMaximumMs ? durationMs : kMaximumMs;
+    value_ = duration_;
+    state_ = TimingState::Ready;
+    lastTick_ = 0;
+  }
+
   void digits(char (&out)[7]) const {
     // A countdown keeps 05:00 visible for its whole first second.
     const uint32_t rounded = (value_+(duration_ ? 999U : 0U))/1000;
@@ -87,6 +98,10 @@ class TimingTools {
   TimingSession &session() { return selected_ < 2 ? stopwatch_ : timers_[selected_-2]; }
   const TimingSession &session() const { return selected_ < 2 ? stopwatch_ : timers_[selected_-2]; }
   void press(uint32_t now) { if (!isClock()) session().press(now); }
+  void setSelectedDuration(uint32_t durationMs) {
+    if (isClock() || isStopwatch()) return;
+    session().setDuration(durationMs);
+  }
   bool tick(uint32_t now) {
     const TimingState before = session().state();
     stopwatch_.tick(now);

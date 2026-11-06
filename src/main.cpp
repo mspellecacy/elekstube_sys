@@ -69,6 +69,23 @@ uint8_t orbitBand = 0;
 bool orbitDmaLastBand = false;
 uint32_t orbitDmaStarted = 0, orbitDmaFrameWorkUs = 0;
 
+// RGB status lighting on the 12 NeoPixels (GPIO 12). Only show() when the color
+// changes so idle loops do not churn the bus.
+constexpr uint32_t kHoldMs = 1000;      // Long-press threshold shared by all buttons.
+constexpr uint8_t kLedCount = 12;
+uint32_t lastLedColor = 0;              // Packed 0x00RRGGBB; 0 means off.
+uint8_t backlightLevel = 255;           // 100 % → 60 % → 30 % → off → 100 %.
+
+// Read the ESP32's internal die temperature as a standalone fallback when the
+// host is offline. Only compiled on the ESP32 target.
+float internalCelsius() {
+#ifdef temperatureRead
+  return temperatureRead();
+#else
+  return -127.0f;  // Sentinel: not available on this build.
+#endif
+}
+
 void finishOrbitTransfer(bool wait = true);
 
 void updateTime(uint32_t now) {
@@ -215,7 +232,14 @@ void gauge(uint8_t i) {
     canvas.drawSmoothArc(cx, cy, 58, 52, 0, end, canvas.alphaBlend(28, accent, kBg), kBg, true);
     canvas.drawSmoothArc(cx, cy, 56, 53, 0, end, accent, kBg, true);
   }
-  const char *value = online ? p.value : "--";
+  char *value = const_cast<char *>(online ? p.value : "--");
+  if (!online && i == 1) {  // CPU TEMP panel: fall back to the ESP32 die sensor.
+    const float temp = internalCelsius();
+    if (temp > -100.0f) {
+      snprintf(panels[i].value, sizeof(panels[i].value), "%.0f", temp);
+      value = panels[i].value;
+    }
+  }
   font(kValueFont);
   const auto *face = canvas.textWidth(value) > 96 ? kRateFont : kValueFont;
   text(value, cx, 86, online ? kWhite : kMuted, face);
@@ -442,6 +466,37 @@ void setDisplayMode(DisplayMode mode) {
   drawAll();
 }
 
+// RGB status lighting: one color for the whole strip, refreshed only when it
+// changes so the NeoPixel bus stays idle otherwise.
+void updateLeds(uint32_t now) {
+  uint32_t color = 0;
+  if (screenEnabled) {
+    if (!timingTools.isClock()) {
+      const auto state = timingTools.session().state();
+      if (state == TimingState::Running) {
+        // Gentle breathing yellow-green while a stopwatch or timer runs.
+        const float breathe = 0.5f + 0.5f * sinf(static_cast<float>(now) / 900.0f);
+        color = rgb(static_cast<uint8_t>(255 * breathe),
+                    static_cast<uint8_t>(180 * breathe), 0);
+      } else if (state == TimingState::Finished) {
+        color = rgb(255, 0, 0);  // Timer finished: solid red.
+      } else {
+        color = rgb(64, 64, 0);  // Stopped or ready: dim yellow.
+      }
+    } else if (online && ntpClock.synced()) {
+      color = rgb(0, 255, 0);    // Synced + online: green.
+    } else if (WiFi.status() == WL_CONNECTED) {
+      color = rgb(0, 0, 255);    // Wi-Fi up, not yet synced: blue.
+    } else {
+      color = rgb(255, 0, 0);    // Offline: red.
+    }
+  }
+  if (color == lastLedColor) return;
+  for (uint8_t n = 0; n < kLedCount; ++n) leds.setPixelColor(n, color);
+  leds.show();
+  lastLedColor = color;
+}
+
 void pressControl(char button) {
   switch (button) {
     case 'A':
@@ -542,6 +597,26 @@ void processLine(const char *line, size_t lineLength, Stream &reply, bool tcp) {
                    strcmp(mode,"flip") == 0 ? DisplayMode::Flip :
                    strcmp(mode,"clock") == 0 ? DisplayMode::Nixie : DisplayMode::Monitor);
     reply.printf("{\"type\":\"mode\",\"seq\":%lu,\"mode\":\"%s\"}\n", doc["seq"] | 0UL, mode);
+    return;
+  }
+  if (strcmp(type, "timer") == 0) {
+    // Set the selected countdown's duration (1–99 minutes). No effect on clock
+    // or stopwatch; stopwatches keep a fixed zero duration.
+    if (timingTools.isClock() || timingTools.isStopwatch()) {
+      reply.println("{\"type\":\"error\",\"error\":\"invalid-tool\"}");
+      return;
+    }
+    const auto &durationField = doc["duration_seconds"];
+    if (!durationField.is<unsigned int>() ||
+        durationField.as<unsigned int>() < 1 ||
+        durationField.as<unsigned int>() > 5940) {
+      reply.println("{\"type\":\"error\",\"error\":\"invalid-timer-duration\"}");
+      return;
+    }
+    const uint32_t seconds = durationField.as<unsigned int>();
+    timingTools.setSelectedDuration(seconds * 1000);
+    reply.printf("{\"type\":\"timer\",\"seq\":%lu,\"duration_seconds\":%u,\"saved\":true}\n",
+                 doc["seq"] | 0UL, seconds);
     return;
   }
   if (strcmp(type, "capture") == 0) {
@@ -680,9 +755,13 @@ void loop() {
   }
   const uint32_t now = millis();
   updateTime(now);
+  updateLeds(now);
   if (buttonA.pressed(digitalRead(kButtonA) == LOW, now)) {
     ++buttonAPresses;
     pressControl('A');
+  }
+  if (buttonA.held(digitalRead(kButtonA) == LOW, now, kHoldMs)) {
+    setDisplayMode(DisplayMode::Monitor);
   }
   if (buttonB.pressed(digitalRead(kButtonB) == LOW, now)) {
     ++buttonBPresses;
@@ -694,6 +773,16 @@ void loop() {
   }
   if (buttonD.pressed(digitalRead(kButtonD) == LOW, now)) {
     pressControl('D');
+  }
+  if (buttonD.held(digitalRead(kButtonD) == LOW, now, kHoldMs)) {
+    // Cycle backlight brightness: 100 → 60 → 30 → off → 100.
+    static constexpr uint8_t kLevels[] = {255, 153, 76, 0};
+    uint8_t next = kLevels[0];
+    for (unsigned n = 0; n < sizeof(kLevels); ++n) {
+      if (kLevels[n] == backlightLevel) { next = kLevels[(n + 1) % sizeof(kLevels)]; break; }
+    }
+    backlightLevel = next;
+    analogWrite(kBacklight, backlightLevel);
   }
   if (timingLabelsDirty && isClockMode(displayMode)) drawAll();
   if (isClockMode(displayMode) && screenEnabled) animateClock();

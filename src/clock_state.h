@@ -73,7 +73,27 @@ class DebouncedButton {
     return false;
   }
 
+  // A hold fires once after the button has been stable-down for holdMs; it does
+  // not repeat while the button stays down and resets on release. Query both
+  // pressed() and held() each loop with the same reading; they track independent
+  // edge state so neither corrupts the other.
+  bool held(bool down, uint32_t now, uint32_t holdMs) {
+    if (down != rawDown_) { rawDown_ = down; changed_ = now; }
+    if (rawDown_ && !holdStable_ &&
+        static_cast<uint32_t>(now - changed_) >= 30) {
+      holdStable_ = true;
+    }
+    if (!rawDown_) { longReported_ = false; holdStable_ = false; return false; }
+    if (!longReported_ && holdStable_ &&
+        static_cast<uint32_t>(now - changed_) >= holdMs) {
+      longReported_ = true;
+      return true;
+    }
+    return false;
+  }
+
  private:
-  bool rawDown_ = false, stableDown_ = false;
+  bool rawDown_ = false, stableDown_ = false, holdStable_ = false,
+      longReported_ = false;
   uint32_t changed_ = 0;
 };

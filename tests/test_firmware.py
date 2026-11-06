@@ -66,3 +66,23 @@ class FirmwareStateTests(unittest.TestCase):
                             "-I", str(root / "src"), str(root / "tests/clock_state_test.cpp"),
                             "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
+
+    def test_led_status_long_press(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "led-status-test"
+            subprocess.run(["g++", "-std=c++11", "-Wall", "-Wextra", "-Werror",
+                            "-fsanitize=address,undefined", "-I", str(root / "src"),
+                            str(root / "tests/led_status_test.cpp"), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True,
+                           env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
+
+    def test_timer_duration_set_and_apply(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "timer-duration-test"
+            subprocess.run(["g++", "-std=c++11", "-Wall", "-Wextra", "-Werror",
+                            "-fsanitize=address,undefined", "-I", str(root / "src"),
+                            str(root / "tests/timer_duration_test.cpp"), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True,
+                           env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
